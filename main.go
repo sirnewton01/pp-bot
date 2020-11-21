@@ -2,15 +2,15 @@ package main
 
 import (
 	"fmt"
-	"github.com/maltegrosse/go-modemmanager"
 	"github.com/alecthomas/kong"
+	"github.com/maltegrosse/go-modemmanager"
 	"log"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
+	"net/url"
 	"strings"
 	"time"
-	"net/url"
 )
 
 var CLI struct {
@@ -19,7 +19,6 @@ var CLI struct {
 	Password   string   `required help:"Matrix password"`
 	Roomid     string   `required help:"Matrix room to receive commands and send responses"`
 }
-
 
 var room id.RoomID
 var client *mautrix.Client
