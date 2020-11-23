@@ -17,7 +17,7 @@ me: sms 5555555555 A reply to the message...
 bot: sent
 bot: call +11234567890
 me: location
-bot: location NmeaSentences: [$GPGSA,A,1,,,,,,,,,,,,,,,,*32 $GPRMC,,V,,,,,,,,,,N*53 $GPGSV,1,1,01,40,,,34,1*66 $GPVTG,,T,,M,,N,,K,N*2C $GPGGA,,,,,,0,,,,,,,,*66] Mcc: 302, Mnc: 610, Lac: FFFE, Ci: 1D11F15, Tac: 2D8A
+bot: location NmeaSentences: [$GPGSA,A,1,,,,,,,,,,,,,,,,*32 $GPRMC,,V,,,,,,,,,,N*53 $GPGSV,1,1,01,40,,,34,1*66 $GPVTG,,T,,M,,N,,K,N*2C $GPGGA,,,,,,0,,,,,,,,*66] Mcc: 302, Mnc: 610, Lac: FFFE, Ci: 1A1A1A, Tac: 2FFF
 ```
 
 PP-Bot uses ModemManager and will only work on Linux installations where it is installed and active.
