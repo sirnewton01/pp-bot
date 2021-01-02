@@ -10,6 +10,7 @@ import (
 	"maunium.net/go/mautrix/id"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,11 +18,14 @@ var CLI struct {
 	Homeserver *url.URL `required help:"Matrix homeserver URL"`
 	Username   string   `required help:"Matrix username localpart"`
 	Password   string   `required help:"Matrix password"`
-	Roomid     string   `required help:"Matrix room to receive commands and send responses"`
+	DefaultRoomId     string   `required help:"Matrix room where default output can go"`
+	Userid     string   `required help:"Matrix userid that may command this bot, others are ignored."`
 }
 
-var room id.RoomID
 var client *mautrix.Client
+var defaultRoom id.RoomID
+var t2r sync.Map
+var r2t sync.Map
 
 func main() {
 	kong.Parse(&CLI)
@@ -44,8 +48,8 @@ func main() {
 	}
 	log.Println("Login successful")
 
-	room = id.RoomID(CLI.Roomid)
-	_, err = client.JoinRoomByID(room)
+	defaultRoom = id.RoomID(CLI.DefaultRoomId)
+	_, err = client.JoinRoomByID(defaultRoom)
 	if err != nil {
 		log.Fatal(err.Error())
 	}
@@ -77,11 +81,43 @@ func main() {
 
 	syncer := client.Syncer.(*mautrix.DefaultSyncer)
 	timeBegin := time.Now().Unix() * 1000
-	syncer.OnEventType(event.EventMessage, func(source mautrix.EventSource, evt *event.Event) {
-		if evt.Timestamp <= timeBegin || evt.Sender == client.UserID {
+
+	syncer.OnEventType(event.StateTopic, func(source mautrix.EventSource, evt *event.Event) {
+		topic := evt.Content.AsTopic()
+		log.Printf("Updating topic %s %s\n", evt.RoomID, topic.Topic)
+
+		t2r.Store(topic.Topic, evt.RoomID.String())
+		r2t.Store(evt.RoomID.String(), topic.Topic)
+	})
+
+	syncer.OnEventType(event.StateMember, func(source mautrix.EventSource, evt *event.Event) {
+		if evt.Sender.String() != CLI.Userid {
+			log.Printf("Skipping event: not from the right user\n")
 			return
 		}
+
+		log.Printf("StateEvent\n")
+		me := evt.Content.AsMember()
+		if me.Membership.IsInviteOrJoin() {
+			log.Printf("Joining room %s\n", evt.RoomID)
+			_, err = client.JoinRoomByID(evt.RoomID)
+			if err != nil {
+				log.Printf("Error joining room: %s\n", err.Error())
+			}
+		}
+	})
+
+	syncer.OnEventType(event.EventMessage, func(source mautrix.EventSource, evt *event.Event) {
+		if evt.Timestamp <= timeBegin || evt.Sender.String() != CLI.Userid {
+			log.Printf("Skipping event\n")
+			return
+		}
+
 		msg := evt.Content.AsMessage().Body
+		msgPrefix, ok := r2t.Load(evt.RoomID.String())
+		if ok && len(msgPrefix.(string)) != 0 {
+			msg = msgPrefix.(string) + " " + msg
+		}
 		if strings.HasPrefix(msg, "sms ") {
 			dest := strings.Split(msg, " ")[1]
 			txt := strings.Replace(msg, "sms "+dest+" ", "", 1)
@@ -98,7 +134,7 @@ func main() {
 				log.Println(err.Error())
 			}
 			log.Println("sms " + dest + " " + txt)
-			client.SendText(room, "sent")
+			client.SendText(evt.RoomID, "sent")
 		} else if strings.HasPrefix(msg, "call ") {
 			dest := strings.Split(msg, " ")[1]
 			voice, err := modems[0].GetVoice()
@@ -110,7 +146,7 @@ func main() {
 				log.Println(err.Error())
 			}
 			log.Println("call " + dest)
-			client.SendText(room, "calling")
+			client.SendText(evt.RoomID, "calling")
 		} else if strings.HasPrefix(msg, "location") {
 			mloc, err := modems[0].GetLocation()
 			if err != nil {
@@ -121,16 +157,16 @@ func main() {
 				log.Println(err.Error())
 			}
 			log.Println("location")
-			client.SendText(room, fmt.Sprintf("location %s %s\n", loc.GpsNmea, loc.ThreeGppLacCi))
+			client.SendText(evt.RoomID, fmt.Sprintf("location %s %s\n", loc.GpsNmea, loc.ThreeGppLacCi))
 		} else if strings.HasPrefix(msg, "help") {
 			log.Println("help")
-			client.SendText(room, `help
+			client.SendText(evt.RoomID, `help
 sms <phone_number> <message>
 call <phone_number>
 location`)
 		} else {
 			log.Printf("unknown command %s\n", evt.Content.AsMessage().Body)
-			client.SendText(room, "Sorry, I don't understand")
+			client.SendText(evt.RoomID, "Sorry, I don't understand")
 		}
 	})
 
@@ -184,11 +220,19 @@ func listenToModemPropertiesChanged(modem modemmanager.Modem) {
 					}
 
 					log.Printf("sms %v %v\n", nmbr, txt)
+					roomId, ok := t2r.Load("sms " + nmbr)
+					m := fmt.Sprintf("%v", txt)
+					if !ok {
+						roomId = defaultRoom.String()
+						m = fmt.Sprintf("sms %v %v", nmbr, txt)
+					}
 					go func() {
 						for {
-							_, err := client.SendText(room, fmt.Sprintf("sms %v %v", nmbr, txt))
+							_, err := client.SendText(id.RoomID(roomId.(string)), m)
 							if err != nil {
 								log.Printf("Retrying...\n")
+								roomId = defaultRoom.String()
+								m = fmt.Sprintf("sms %v %v", nmbr, txt)
 								<-time.After(10 * time.Second)
 							} else {
 								break
@@ -196,6 +240,7 @@ func listenToModemPropertiesChanged(modem modemmanager.Modem) {
 						}
 					}()
 
+					// TODO delete only after successfully sending the message
 					mging.Delete(sms)
 				}
 			}
@@ -228,7 +273,14 @@ func listenToModemPropertiesChanged(modem modemmanager.Modem) {
 						continue
 					}
 					log.Printf("call %v\n", nmbr)
-					client.SendText(room, fmt.Sprintf("call %v\n", nmbr))
+
+					roomId, ok := t2r.Load("sms " + nmbr)
+					m := "<called>"
+					if !ok {
+						roomId = defaultRoom.String()
+						m = fmt.Sprintf("call %v", nmbr)
+					}
+					client.SendText(id.RoomID(roomId.(string)), m)
 				}
 			}
 		}
