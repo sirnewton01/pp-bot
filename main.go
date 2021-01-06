@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/alecthomas/kong"
 	"github.com/maltegrosse/go-modemmanager"
+	"github.com/omeid/upower-notify/upower"
 	"log"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
@@ -15,11 +16,12 @@ import (
 )
 
 var CLI struct {
-	Homeserver *url.URL `required help:"Matrix homeserver URL"`
-	Username   string   `required help:"Matrix username localpart"`
-	Password   string   `required help:"Matrix password"`
-	DefaultRoomId     string   `required help:"Matrix room where default output can go"`
-	Userid     string   `required help:"Matrix userid that may command this bot, others are ignored."`
+	Homeserver    *url.URL `required help:"Matrix homeserver URL"`
+	Username      string   `required help:"Matrix username localpart"`
+	Password      string   `required help:"Matrix password"`
+	DefaultRoomId string   `required help:"Matrix room where default output can go"`
+	Userid        string   `required help:"Matrix userid that may command this bot, others are ignored."`
+	Battery       string   `required help:"DBus battery name to monitor for power level"`
 }
 
 var client *mautrix.Client
@@ -89,6 +91,29 @@ func main() {
 		t2r.Store(topic.Topic, evt.RoomID.String())
 		r2t.Store(evt.RoomID.String(), topic.Topic)
 	})
+
+	go func() {
+		for {
+			<-time.After(5 * time.Minute)
+			
+			log.Printf("Checking battery level\n")
+			up, err := upower.New(CLI.Battery)
+			if err != nil {
+				log.Printf("Error getting battery for %s: %s\n", CLI.Battery, err.Error())
+				return
+			}
+			ud, err := up.Get()
+			if err != nil {
+				log.Printf("Error getting battery state for %s: %s\n", CLI.Battery, err.Error())
+				continue
+			}
+
+			if ud.Percentage < 16 {
+				log.Printf("Sending low battery warning\n")
+				client.SendText(id.RoomID(defaultRoom.String()), "I'm dying. Please plug me in.")
+			}
+		}
+	}()
 
 	syncer.OnEventType(event.StateMember, func(source mautrix.EventSource, evt *event.Event) {
 		if evt.Sender.String() != CLI.Userid {
